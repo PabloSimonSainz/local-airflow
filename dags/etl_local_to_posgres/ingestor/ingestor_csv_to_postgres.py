@@ -38,6 +38,11 @@ class IngestorCSVToPostgres(IIngestor):
     def upsert_data_to_postgres(self, cols: list) -> None:
         """
         Upsert data from postgres table to another postgres table.
+        
+        :param cols: list of table columns inserted
+        :type cols: list
+        :return: None
+        :rtype: None
         """
         # Create connection to postgres
         pg_hook = PostgresHook(postgres_conn_id=self.postgres_conn_id)
