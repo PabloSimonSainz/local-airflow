@@ -1,5 +1,6 @@
 CREATE TABLE if not exists churn_prediction_dataset (
-	churn VARCHAR(255) PRIMARY KEY,
+	Customer_ID INT PRIMARY KEY,
+	churn INT,
 	new_cell VARCHAR(255),
 	crclscod VARCHAR(255),
 	asl_flag VARCHAR(255),
@@ -29,7 +30,6 @@ CREATE TABLE if not exists churn_prediction_dataset (
 	avg3mou INT,
 	avg3qty INT,
 	avg3rev INT,
-	Customer_ID INT,
 	rev_Mean FLOAT,
 	mou_Mean FLOAT,
 	totmrc_Mean FLOAT,
