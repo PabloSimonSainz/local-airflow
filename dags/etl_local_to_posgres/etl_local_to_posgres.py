@@ -39,15 +39,14 @@ def get_posgres_cols(table_name:str) -> list:
     
 
 def upsert_data_to_postgres():
-    print(f'Loading data from {DATASET_PATH} to PostgreSQL...')
+    print(f'loading data from {DATASET_PATH} to postgresql...')
     df = pd.read_csv(DATASET_PATH, sep=';', decimal=',')
-    print(f'Loaded {df.shape[0]} rows')
-
+    print(f'loaded {df.shape[0]} rows')
     postgres_cols:list = get_posgres_cols(DATASET_NAME)
     
-    print(f"Postgres columns: {postgres_cols}")
+    print(f"postgres columns: {postgres_cols}")
     
-    # Create a connection with Postgres
+    # create a connection with postgres
     postgres_hook = PostgresHook(postgres_conn_id=POSTGRE_CONN_ID)
     with postgres_hook.get_conn() as connection, connection.cursor() as cursor:
         cols = df.columns.tolist()
@@ -57,26 +56,23 @@ def upsert_data_to_postgres():
         # df cols lower case
         df.columns = df.columns.str.lower()
         df = df[postgres_cols]
-            
-        # Upsert the whole DataFrame to a new table, the pk=Customer_ID
+        
+        # upsert the whole dataframe to a new table, the PK=customer_id
         added_rows = 0
-        for _, row in df.iterrows():
-            if len(row) == 0:
-                continue
-            
-            values = ', '.join([f"'{row[col]}'" if isinstance(row[col], str) else str(row[col]) for col in df.columns])
-            try:
-                cursor.execute(f"""
-                    INSERT INTO {DATASET_NAME} ({', '.join(df.columns)})
-                    VALUES ({values})
-                    ON CONFLICT ({PK}) DO UPDATE SET {update_set};
-                """)
-                connection.commit()
-                added_rows += 1
-            except Exception as e:
-                print(f"Error inserting row: {e}")
-
-        print(f'Upserted {added_rows} rows')
+        query = f"INSERT INTO {DATASET_NAME} ({', '.join(df.columns)})"
+        query += "\n VALUES "
+        
+        values = ["("+ ', '.join([f"'{row[col]}'" if isinstance(row[col], str) else str(row[col]) for col in df.columns]) + ")" for _, row in df.iterrows()]
+        
+        query += ",\n".join(values)
+        query += f"\n ON CONFLICT ({PK}) DO UPDATE SET {update_set};"
+        
+        print(f'executed query: {query}')
+        
+        cursor.execute(query)
+        
+        connection.commit()
+        print(f'upserted {added_rows} rows')
     
 with DAG(
     dag_id=DAG_ID,
@@ -87,5 +83,5 @@ with DAG(
         task_id='load_data_to_postgres',
         python_callable=upsert_data_to_postgres
     )
-
+    
     load_data_to_postgres
