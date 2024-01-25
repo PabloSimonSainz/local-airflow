@@ -161,3 +161,6 @@ cython_debug/
 
 # airflow logs
 logs/
+
+# temp data models
+data/models/
