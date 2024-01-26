@@ -148,7 +148,7 @@ def preprocess_data() -> None:
     
     df.to_sql(f"{TABLE_NAME}_gold", engine, index=False, if_exists='replace')
 
-def train_model() -> dict:
+def train() -> dict:
     """
     Train model
     """
@@ -181,7 +181,7 @@ def train_model() -> dict:
         "model_name":model_name
     }
 
-def evaluate_model(seed:int, model_name:str) -> None:
+def validate(seed:int, model_name:str) -> None:
     """
     Evaluate model
     
@@ -230,12 +230,12 @@ with DAG(
     
     train_model = PythonOperator(
         task_id='train_model',
-        python_callable=train_model
+        python_callable=train
     )
     
     evaluate_model = PythonOperator(
         task_id='evaluate_model',
-        python_callable=evaluate_model,
+        python_callable=validate,
         op_kwargs={'seed': train_model.output['seed'], 'model_name': train_model.output['model_name']}
     )
     
