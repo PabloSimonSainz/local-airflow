@@ -16,15 +16,11 @@ from sklearn.preprocessing import OneHotEncoder, StandardScaler, FunctionTransfo
 from sklearn.impute import SimpleImputer
 from sklearn.base import BaseEstimator, TransformerMixin
 
-from pipe_utils.outlier_handler import OutlierHandler
-from pipe_utils.i_preprocessor import IPreprocessor
+from ml_churn_prediction.preprocessor.pipe_utils.outlier_handler import OutlierHandler
+from ml_churn_prediction.preprocessor.i_preprocessor import IPreprocessor
 
-ID_CONNECTION = 'postgres_conn'
+
 DAG_ID = 'ml_churn_prediction'
-
-PK = 'customer_id'.lower()
-Y_COL = 'churn'.lower()
-TABLE_NAME = 'churn_prediction_dataset'
 
 MODELS_PATH = f"/opt/airflow/data/models"
 CONFIG_PATH = f"/opt/airflow/config"
@@ -39,26 +35,33 @@ def _read_config() -> dict:
     return config
 
 class ChurnPreprocessor(IPreprocessor):
-    def _get_data() -> pd.DataFrame:
+    def __init__(self, pk, y, conn_id, table_name):
+        self._pk = pk
+        self._y = y
+        self._postgres_conn_id = conn_id
+        self._table_name = table_name
+    
+    def _get_data(self) -> pd.DataFrame:
         """
         Read dataset from Postgres
         """
         select_cols:list = _read_config()['features']
-        select_cols = set([PK, Y_COL] + select_cols)
+        select_cols = set([self._pk, self._y] + select_cols)
         select_cols = [i.lower() for i in select_cols]
         select_cols = list(set(select_cols))
         
         select_cols:str = ', '.join(select_cols)
         
-        pg_hook = PostgresHook(postgres_conn_id=ID_CONNECTION)
+        pg_hook = PostgresHook(postgres_conn_id=self._postgres_conn_id)
         engine = create_engine(pg_hook.get_uri())
         
-        print(f"Reading data from {TABLE_NAME}...")
+        print(f"Reading data from {self._table_name}...")
         
-        df:pd.DataFrame = pd.read_sql(f"SELECT {select_cols} FROM {TABLE_NAME}", engine)
+        df:pd.DataFrame = pd.read_sql(f"SELECT {select_cols} FROM {self._table_name}", engine)
         
         return df
 
+    @staticmethod
     def _build_preprocessor(X: pd.DataFrame, y: pd.Series) -> ColumnTransformer:
         """
         Build enhanced preprocessor pipeline
@@ -105,34 +108,29 @@ class ChurnPreprocessor(IPreprocessor):
         
         return preprocessor
 
-    @staticmethod
-    def preprocess_data() -> None:
+    def preprocess(self) -> None:
         """
         Enhanced preprocess dataset and save to Postgres
         """
-        df = OutlierHandler._get_data()
-        
-        for col in df.columns:
-            if "U" in df[col].unique():
-                print(f"{col} ({df[col].dtype}): {df[col].unique()}")
+        df = self._get_data()
         
         # preprocess data
-        y = df[Y_COL]
+        y = df[self._y]
         X = df
         
         for col in X.columns:
             print(f"{col}: {X[col].dtype}")
         
-        preprocessor = OutlierHandler._build_preprocessor(X=X, y=y)
+        preprocessor = ChurnPreprocessor._build_preprocessor(X=X, y=y)
         
         X = preprocessor.fit_transform(X=X, y=y)
         
         # save preprocessed data
         df = pd.DataFrame(X)
-        df[Y_COL] = y
+        df[self._y] = y
         
-        pg_hook = PostgresHook(postgres_conn_id=ID_CONNECTION)
+        pg_hook = PostgresHook(postgres_conn_id=self._postgres_conn_id)
         engine = create_engine(pg_hook.get_uri())
         
-        df.to_sql(f"{TABLE_NAME}_preprocessed", engine, index=False, if_exists='replace')
+        df.to_sql(f"{self._table_name}_preprocessed", engine, index=False, if_exists='replace')
         
