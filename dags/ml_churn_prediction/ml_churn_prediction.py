@@ -73,7 +73,7 @@ def validate(**context) -> None:
     _, X_test, _, y_test = train_test_split(X, y, test_size=0.2, random_state=seed)
     
     # load model
-    model_path = f"{MODELS_PATH}/{model_name}"
+    model_path = f"{MODELS_PATH}/{model_name}.pkl"
     
     with open(model_path, 'rb') as f:
         model = pickle.load(f)
@@ -81,17 +81,28 @@ def validate(**context) -> None:
     # evaluate model
     y_pred = model.predict(X_test)
     
+    # evaluate model with the whole dataset
+    y_pred_all = model.predict(X)
+    
     # insert id, accuracy, precision, recall, f1 score to Postgres
     values = {
         "id":[model_name],
-        "accuracy":[np.mean(y_pred==y_test)],
-        "precision":[np.mean(y_pred[y_test==1]==y_test[y_test==1])],
-        "recall":[np.mean(y_pred[y_test==1]==y_test[y_test==1])],
-        "f1_score":[np.mean(y_pred[y_test==1]==y_test[y_test==1])],
-        "true_positive":[np.sum(y_pred[y_test==1]==1)],
-        "true_negative":[np.sum(y_pred[y_test==0]==0)],
-        "false_positive":[np.sum(y_pred[y_test==0]==1)],
-        "false_negative":[np.sum(y_pred[y_test==1]==0)]
+        "test_accuracy":[np.mean(y_pred==y_test)],
+        "test_precision":[np.mean(y_pred[y_test==1]==y_test[y_test==1])],
+        "test_recall":[np.mean(y_pred[y_test==1]==y_test[y_test==1])],
+        "test_f1_score":[np.mean(y_pred[y_test==1]==y_test[y_test==1])],
+        "test_true_positive":[np.sum(y_pred[y_test==1]==1)],
+        "test_true_negative":[np.sum(y_pred[y_test==0]==0)],
+        "test_false_positive":[np.sum(y_pred[y_test==0]==1)],
+        "test_false_negative":[np.sum(y_pred[y_test==1]==0)],
+        "all_accuracy":[np.mean(y_pred_all==y)],
+        "all_precision":[np.mean(y_pred_all[y==1]==y[y==1])],
+        "all_recall":[np.mean(y_pred_all[y==1]==y[y==1])],
+        "all_f1_score":[np.mean(y_pred_all[y==1]==y[y==1])],
+        "all_true_positive":[np.sum(y_pred_all[y==1]==1)],
+        "all_true_negative":[np.sum(y_pred_all[y==0]==0)],
+        "all_false_positive":[np.sum(y_pred_all[y==0]==1)],
+        "all_false_negative":[np.sum(y_pred_all[y==1]==0)]
     }
     
     id:str = model_name

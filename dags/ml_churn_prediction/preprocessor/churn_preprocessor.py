@@ -22,7 +22,6 @@ from ml_churn_prediction.preprocessor.i_preprocessor import IPreprocessor
 
 DAG_ID = 'ml_churn_prediction'
 
-MODELS_PATH = f"/opt/airflow/data/models"
 CONFIG_PATH = f"/opt/airflow/config"
 
 def _read_config() -> dict:
@@ -70,8 +69,6 @@ class ChurnPreprocessor(IPreprocessor):
         
         config = _read_config()
         
-        cols = [i.lower() for i in config["features"]]
-        
         numerical_cols = X.select_dtypes(exclude=['object']).columns
         categorical_cols = X.select_dtypes(include=['object']).columns
         
@@ -116,7 +113,7 @@ class ChurnPreprocessor(IPreprocessor):
         # preprocess data
         pk = df[self._pk]
         y = df[self._y]
-        X = df
+        X = df.drop([self._pk, self._y], axis=1).copy()
         
         preprocessor = ChurnPreprocessor._build_preprocessor(X=X, y=y)
         
@@ -139,4 +136,3 @@ class ChurnPreprocessor(IPreprocessor):
         engine = create_engine(pg_hook.get_uri())
         
         df.to_sql(f"{self._table_name}_preprocessed", engine, if_exists='replace', index=False)
-        

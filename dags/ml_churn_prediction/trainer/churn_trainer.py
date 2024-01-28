@@ -70,8 +70,8 @@ class ChurnTrainer(ITrainer):
         model.fit(X_train, y_train)
         
         # save model
-        model_name = f"model_{seed}_{datetime.now().strftime('%Y%m%d%H%M%S')}.pkl"
-        model_path = f"{MODELS_PATH}/{model_name}"
+        model_name = f"model_{seed}_{datetime.now().strftime('%Y%m%d%H%M%S')}"
+        model_path = f"{MODELS_PATH}/{model_name}.pkl"
         
         with open(model_path, 'wb') as f:
             pickle.dump(model, f)
@@ -82,5 +82,16 @@ class ChurnTrainer(ITrainer):
         }
         
         print(f"Trained model {model_name} with seed {seed}")
+        
+        # print feature importance
+        feature_importance = model['classifier'].feature_importances_
+        feature_importance = pd.DataFrame({
+            'feature':X_train.columns,
+            'importance':feature_importance
+        })
+        feature_importance = feature_importance.sort_values(by='importance', ascending=False)
+        # save feature importance
+        feature_importance_path = f"{MODELS_PATH}/{model_name}_feature_importance.csv"
+        feature_importance.to_csv(feature_importance_path, index=False)
         
         context['ti'].xcom_push(key='training_result', value=result)
