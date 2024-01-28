@@ -75,6 +75,7 @@
         "recv_sms_Mean",
         "recv_vce_Mean",
         "refurb_new",
+        "rev_Mean",
         "roam_Mean",
         "rv",
         "threeway_Mean",
@@ -87,7 +88,7 @@
         "unan_vce_Mean",
         "uniqsubs",
         "vceovr_Mean"
-    ],
+        ],
     "preprocess": {
         "missing_values": {
             "mean": [
@@ -106,6 +107,7 @@
                 "roam_Mean",
                 "mou_Mean"
             ],
+            "median": [],
             "literal": {
                 "hnd_webcap": "unknow"
             }

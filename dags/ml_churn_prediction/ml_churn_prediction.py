@@ -1,5 +1,6 @@
 from datetime import datetime
 import pickle
+import json
 from random import randint
 
 from airflow import DAG
@@ -16,138 +17,142 @@ from sklearn.compose import ColumnTransformer
 from sklearn.preprocessing import OneHotEncoder, StandardScaler, FunctionTransformer
 from sklearn.model_selection import train_test_split
 from sklearn.ensemble import RandomForestClassifier
-
+from sklearn.impute import KNNImputer, SimpleImputer
+from sklearn.base import BaseEstimator, TransformerMixin
 
 ID_CONNECTION = 'postgres_conn'
 DAG_ID = 'ml_churn_prediction'
 
-PK = 'Customer_ID'
-Y_COL = 'churn'
+PK = 'customer_id'.lower()
+Y_COL = 'churn'.lower()
 TABLE_NAME = 'churn_prediction_dataset'
 
 MODELS_PATH = f"/opt/airflow/data/models"
+CONFIG_PATH = f"/opt/airflow/config"
 
 def _read_config() -> dict:
     """
     Read config from Postgres
     """
-    pass
+    with open(f"{CONFIG_PATH}/{DAG_ID}.json", 'r') as f:
+        config = json.load(f)
+        
+    return config
 
 def _get_data() -> pd.DataFrame:
     """
     Read dataset from Postgres
     """
     select_cols:list = _read_config()['features']
-    select_cols.append(Y_COL)
+    select_cols = set([PK, Y_COL] + select_cols)
+    select_cols = [i.lower() for i in select_cols]
+    select_cols = list(set(select_cols))
     
     select_cols:str = ', '.join(select_cols)
     
-    with PostgresHook(postgres_conn_id=ID_CONNECTION) as hook:
-        df = hook.get_pandas_df(f"SELECT {select_cols} FROM {TABLE_NAME}")
-        
+    pg_hook = PostgresHook(postgres_conn_id=ID_CONNECTION)
+    engine = create_engine(pg_hook.get_uri())
+    
+    print(f"Reading data from {TABLE_NAME}...")
+    
+    df:pd.DataFrame = pd.read_sql(f"SELECT {select_cols} FROM {TABLE_NAME}", engine)
+    
     return df
 
-def _remove_outliers(X:pd.DataFrame) -> tuple:
-    """
-    """
-    features = _read_config()['preprocess']['outliers']
-    df = X.copy()
-    
-    indices = [x for x in df.index]    
-    out_indexlist = []
-        
-    for col in features:       
-        Q1 = np.nanpercentile(df[col], 25.)
-        Q3 = np.nanpercentile(df[col], 75.)
-        
-        cut_off = (Q3 - Q1) * 1.5
-        upper, lower = Q3 + cut_off, Q1 - cut_off
-                
-        outliers_index = df[col][(df[col] < lower) | (df[col] > upper)].index.tolist()
-        out_indexlist.extend(outliers_index)
-        
-    #using set to remove duplicates
-    out_indexlist = list(set(out_indexlist))
-    
-    clean_data = np.setdiff1d(indices,out_indexlist)
+class OutlierHandler(BaseEstimator, TransformerMixin):
+    def __init__(self, method='IQR', factor=1.5):
+        self.method = method
+        self.factor = factor
 
-    return X.loc[clean_data]
+    def fit(self, X, y=None):
+        if self.method == 'IQR':
+            Q1 = X.quantile(0.25)
+            Q3 = X.quantile(0.75)
+            IQR = Q3 - Q1
+            self.lower_bound = Q1 - self.factor * IQR
+            self.upper_bound = Q3 + self.factor * IQR
+        return self
 
-def _fill_missing_values(X:pd.DataFrame) -> pd.DataFrame:
+    def transform(self, X, y=None):
+        X_clipped = X.clip(lower=self.lower_bound, upper=self.upper_bound, axis=1)
+        return X_clipped
+
+def _build_preprocessor(X: pd.DataFrame, y: pd.Series) -> ColumnTransformer:
     """
+    Build enhanced preprocessor pipeline
     """
-    config = _read_config()['preprocess']['missing_values']
-    df = X.copy()
+    config = _read_config()
     
-    for col in df.columns:
-        if col in config['mean']:
-            df[col].fillna(df[col].mean(), inplace=True)
-        elif col in config['literal']:
-            df[col].fillna(config['literal'][col], inplace=True)
+    cols = [i.lower() for i in config["features"]]
+    
+    # numerical nan
+    fill_na_mean_cols = [i.lower() for i in config["preprocess"]["missing_values"]["mean"]]
+    fill_na_median_cols = [i.lower() for i in config["preprocess"]["missing_values"]["median"]]
         
-    return df
-
-def _build_preprocessor(df:pd.DataFrame) -> Pipeline:
-    """
-    Build preprocessor pipeline
-    """
-    cathegorical_features = list(df.select_dtypes(include='object').columns)
-    numerical_features = list(df.select_dtypes(exclude='object').columns)
+    #outlier_cols = config["preprocess"]["outliers"]
     
-    print(f'Categorical features({len(cathegorical_features)}): {cathegorical_features}')
+    categorical_features = list(X.select_dtypes(include='object').columns)
+    numerical_features = list(X.select_dtypes(exclude='object').columns)
+    
+    default_na_cols = list(set(numerical_features) - set(fill_na_mean_cols) - set(fill_na_median_cols))
+    
+    # check that numerical nan columns are numerical
+    assert len(set(fill_na_mean_cols + fill_na_median_cols) - set(numerical_features)) == 0, "Can not be non-numerical columns in mean or median config"
+    
+    print(f'Categorical features({len(categorical_features)}): {categorical_features}')
     print(f'Numerical features({len(numerical_features)}): {numerical_features}')
     
-    # missing values
-    missing_values_transformer = Pipeline(steps=[
-        ('fillNaN', FunctionTransformer(_fill_missing_values))
-    ])
-    
-    # outliers
-    outliers_transformer = Pipeline(steps=[
-        ('removeOutliers', FunctionTransformer(_remove_outliers))
-    ])
-    
-    # transformers
-    cat_transformer = Pipeline(steps=[
+    # build pipeline
+    categorical_pipeline = Pipeline(steps=[
+        ('fill_na', SimpleImputer(strategy='constant', fill_value='Unknown')),
         ('onehot', OneHotEncoder(handle_unknown='ignore'))
     ])
     
-    num_transformer = Pipeline(steps=[
+    numerical_pipeline = Pipeline(steps=[
+        ('outlier', OutlierHandler()),
         ('scaler', StandardScaler())
     ])
     
-    # column transformer
     preprocessor = ColumnTransformer(transformers=[
-        missing_values_transformer,
-        outliers_transformer,
-        ('cat', cat_transformer, cathegorical_features),
-        ('num', num_transformer, numerical_features)
+        ('fill_na_mean', SimpleImputer(strategy='mean'), fill_na_mean_cols),
+        ('fill_na_median', SimpleImputer(strategy='median'), fill_na_median_cols),
+        ('fill_na_numerical_default', SimpleImputer(strategy='constant', fill_value=0), default_na_cols),
+        ('numerical', numerical_pipeline, numerical_features),
+        ('categorical', categorical_pipeline, categorical_features)
     ])
     
     return preprocessor
 
 def preprocess_data() -> None:
     """
-    Preprocess dataset and save to Postgres
-    
-    :return: None
+    Enhanced preprocess dataset and save to Postgres
     """
     df = _get_data()
-    preprocessor = _build_preprocessor(df)
     
-    X = df.drop(Y_COL, axis=1)
+    for col in df.columns:
+        if "U" in df[col].unique():
+            print(f"{col} ({df[col].dtype}): {df[col].unique()}")
+    
+    # preprocess data
     y = df[Y_COL]
+    X = df
     
-    X = preprocessor.fit_transform(X)
+    for col in X.columns:
+        print(f"{col}: {X[col].dtype}")
     
-    df = pd.DataFrame(X, columns=df.drop(Y_COL, axis=1).columns)
+    preprocessor = _build_preprocessor(X=X, y=y)
+    
+    X = preprocessor.fit_transform(X=X, y=y)
+    
+    # save preprocessed data
+    df = pd.DataFrame(X)
     df[Y_COL] = y
     
     pg_hook = PostgresHook(postgres_conn_id=ID_CONNECTION)
     engine = create_engine(pg_hook.get_uri())
     
-    df.to_sql(f"{TABLE_NAME}_gold", engine, index=False, if_exists='replace')
-
+    df.to_sql(f"{TABLE_NAME}_preprocessed", engine, index=False, if_exists='replace')
+    
 def train() -> dict:
     """
     Train model
@@ -157,8 +162,8 @@ def train() -> dict:
     df = _get_data()
     
     # train test split
-    X = df.drop([Y_COL, PK], axis=1)
     y = df[Y_COL]
+    X = df.drop([Y_COL, PK], axis=1)
     
     X_train, _, y_train, _ = train_test_split(X, y, test_size=0.2, random_state=seed)
     
@@ -183,18 +188,20 @@ def train() -> dict:
 
 def validate(seed:int, model_name:str) -> None:
     """
-    Evaluate model
+    Evaluate model, y is a binary variable
     
     :param split_seed: seed used to split dataset
     :type split_seed: int
     
     :return: None
     """
+    eval_table_name = f"{TABLE_NAME}_evaluation"
+    
     df = _get_data()
     
     # train test split
-    X = df.drop([Y_COL, PK], axis=1)
     y = df[Y_COL]
+    X = df.drop([Y_COL, PK], axis=1)
     
     _, X_test, _, y_test = train_test_split(X, y, test_size=0.2, random_state=seed)
     
@@ -207,17 +214,28 @@ def validate(seed:int, model_name:str) -> None:
     # evaluate model
     y_pred = model.predict(X_test)
     
-    # save results
-    results = pd.DataFrame({
-        'y_test': y_test,
-        'y_pred': y_pred
-    })
+    # insert id, accuracy, precision, recall, f1 score to Postgres
+    values = {
+        "id":[model_name],
+        "accuracy":[np.mean(y_pred==y_test)],
+        "precision":[np.mean(y_pred[y_test==1]==y_test[y_test==1])],
+        "recall":[np.mean(y_pred[y_test==1]==y_test[y_test==1])],
+        "f1_score":[np.mean(y_pred[y_test==1]==y_test[y_test==1])],
+        "true_positive":[np.sum(y_pred[y_test==1]==1)],
+        "true_negative":[np.sum(y_pred[y_test==0]==0)],
+        "false_positive":[np.sum(y_pred[y_test==0]==1)],
+        "false_negative":[np.sum(y_pred[y_test==1]==0)]
+    }
+    
+    id:str = model_name
     
     pg_hook = PostgresHook(postgres_conn_id=ID_CONNECTION)
     engine = create_engine(pg_hook.get_uri())
     
-    results.to_sql(f"{TABLE_NAME}_results", engine, index=False, if_exists='replace')
-
+    df = pd.DataFrame(values)
+    
+    df.to_sql(eval_table_name, engine, index=False, if_exists='append')
+    
 with DAG(
     dag_id=DAG_ID,
     start_date=datetime.now()
