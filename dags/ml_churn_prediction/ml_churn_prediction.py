@@ -24,6 +24,8 @@ from ml_churn_prediction.preprocessor.i_preprocessor import IPreprocessor
 from ml_churn_prediction.preprocessor.churn_preprocessor import ChurnPreprocessor
 from ml_churn_prediction.trainer.i_trainer import ITrainer
 from ml_churn_prediction.trainer.churn_trainer import ChurnTrainer
+from ml_churn_prediction.validator.i_validator import IValidator
+from ml_churn_prediction.validator.churn_validator import ChurnValidator
 
 ID_CONNECTION = 'postgres_conn'
 DAG_ID = 'ml_churn_prediction'
@@ -34,85 +36,6 @@ TABLE_NAME = 'churn_prediction_dataset'
 
 MODELS_PATH = f"/opt/airflow/data/models"
 CONFIG_PATH = f"/opt/airflow/config"
-
-def _get_data() -> pd.DataFrame:
-    """
-    Read dataset from Postgres
-    """
-    pg_hook = PostgresHook(postgres_conn_id=ID_CONNECTION)
-    engine = create_engine(pg_hook.get_uri())
-    
-    print(f"Reading data from {TABLE_NAME}...")
-    
-    df:pd.DataFrame = pd.read_sql(f"SELECT * FROM {TABLE_NAME}_preprocessed", engine)
-    
-    return df
-
-def validate(**context) -> None:
-    """
-    Evaluate model, y is a binary variable
-    
-    :param split_seed: seed used to split dataset
-    :type split_seed: int
-    
-    :return: None
-    """
-    model_data = context['ti'].xcom_pull(key='training_result')
-    
-    model_name = model_data['model_name']
-    seed = model_data['seed']
-    
-    eval_table_name = f"{TABLE_NAME}_evaluation"
-    
-    df = _get_data()
-    
-    # train test split
-    y = df[Y_COL]
-    X = df.drop([Y_COL, PK], axis=1)
-    
-    _, X_test, _, y_test = train_test_split(X, y, test_size=0.2, random_state=seed)
-    
-    # load model
-    model_path = f"{MODELS_PATH}/{model_name}.pkl"
-    
-    with open(model_path, 'rb') as f:
-        model = pickle.load(f)
-    
-    # evaluate model
-    y_pred = model.predict(X_test)
-    
-    # evaluate model with the whole dataset
-    y_pred_all = model.predict(X)
-    
-    # insert id, accuracy, precision, recall, f1 score to Postgres
-    values = {
-        "id":[model_name],
-        "test_accuracy":[np.mean(y_pred==y_test)],
-        "test_precision":[np.mean(y_pred[y_test==1]==y_test[y_test==1])],
-        "test_recall":[np.mean(y_pred[y_test==1]==y_test[y_test==1])],
-        "test_f1_score":[np.mean(y_pred[y_test==1]==y_test[y_test==1])],
-        "test_true_positive":[np.sum(y_pred[y_test==1]==1)],
-        "test_true_negative":[np.sum(y_pred[y_test==0]==0)],
-        "test_false_positive":[np.sum(y_pred[y_test==0]==1)],
-        "test_false_negative":[np.sum(y_pred[y_test==1]==0)],
-        "all_accuracy":[np.mean(y_pred_all==y)],
-        "all_precision":[np.mean(y_pred_all[y==1]==y[y==1])],
-        "all_recall":[np.mean(y_pred_all[y==1]==y[y==1])],
-        "all_f1_score":[np.mean(y_pred_all[y==1]==y[y==1])],
-        "all_true_positive":[np.sum(y_pred_all[y==1]==1)],
-        "all_true_negative":[np.sum(y_pred_all[y==0]==0)],
-        "all_false_positive":[np.sum(y_pred_all[y==0]==1)],
-        "all_false_negative":[np.sum(y_pred_all[y==1]==0)]
-    }
-    
-    id:str = model_name
-    
-    pg_hook = PostgresHook(postgres_conn_id=ID_CONNECTION)
-    engine = create_engine(pg_hook.get_uri())
-    
-    df = pd.DataFrame(values)
-    
-    df.to_sql(eval_table_name, engine, index=False, if_exists='append')
     
 with DAG(
     dag_id=DAG_ID,
@@ -146,9 +69,17 @@ with DAG(
         provide_context=True
     )
     
+    # VALIDATOR
+    validator:IValidator = ChurnValidator(
+        pk=PK,
+        y=Y_COL,
+        conn_id=ID_CONNECTION,
+        table_name=TABLE_NAME
+    )
+    
     evaluate_model = PythonOperator(
         task_id='evaluate_model',
-        python_callable=validate,
+        python_callable=validator.validate,
         provide_context=True
     )
     
