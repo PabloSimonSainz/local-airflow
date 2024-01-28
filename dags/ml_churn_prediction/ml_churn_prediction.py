@@ -46,19 +46,12 @@ def _get_data() -> pd.DataFrame:
     """
     Read dataset from Postgres
     """
-    select_cols:list = _read_config()['features']
-    select_cols = set([PK, Y_COL] + select_cols)
-    select_cols = [i.lower() for i in select_cols]
-    select_cols = list(set(select_cols))
-    
-    select_cols:str = ', '.join(select_cols)
-    
     pg_hook = PostgresHook(postgres_conn_id=ID_CONNECTION)
     engine = create_engine(pg_hook.get_uri())
     
     print(f"Reading data from {TABLE_NAME}...")
     
-    df:pd.DataFrame = pd.read_sql(f"SELECT {select_cols} FROM {TABLE_NAME}", engine)
+    df:pd.DataFrame = pd.read_sql(f"SELECT * FROM {TABLE_NAME}_preprocessed", engine)
     
     return df
 
@@ -70,9 +63,15 @@ def train() -> dict:
     
     df = _get_data()
     
+    # sort by PK ensures split with same seed will produce same result
+    df = df.sort_values(by=PK)
+    
     # train test split
     y = df[Y_COL]
     X = df.drop([Y_COL, PK], axis=1)
+    
+    for i in X.columns:
+        print(f"{i}: TYPE={X[i].dtype}, MAX={X[i].max()}, MIN={X[i].min()}, HAS_NULL={X[i].isnull().sum()}")
     
     X_train, _, y_train, _ = train_test_split(X, y, test_size=0.2, random_state=seed)
     
@@ -161,7 +160,7 @@ with DAG(
         task_id='preprocess_data',
         python_callable=preprocessor.preprocess
     )
-    
+        
     train_model = PythonOperator(
         task_id='train_model',
         python_callable=train
@@ -174,3 +173,4 @@ with DAG(
     )
     
     preprocess_data >> train_model >> evaluate_model
+    #train_model >> evaluate_model

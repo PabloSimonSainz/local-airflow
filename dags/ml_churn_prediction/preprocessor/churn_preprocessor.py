@@ -66,45 +66,44 @@ class ChurnPreprocessor(IPreprocessor):
         """
         Build enhanced preprocessor pipeline
         """
+        def_nan_num_strategy='mean'
+        
         config = _read_config()
         
         cols = [i.lower() for i in config["features"]]
         
-        # numerical nan
-        fill_na_mean_cols = [i.lower() for i in config["preprocess"]["missing_values"]["mean"]]
-        fill_na_median_cols = [i.lower() for i in config["preprocess"]["missing_values"]["median"]]
-            
-        #outlier_cols = config["preprocess"]["outliers"]
+        numerical_cols = X.select_dtypes(exclude=['object']).columns
+        categorical_cols = X.select_dtypes(include=['object']).columns
         
-        categorical_features = list(X.select_dtypes(include='object').columns)
-        numerical_features = list(X.select_dtypes(exclude='object').columns)
+        # missing values
+        fill_na_mean_cols = [i.lower() for i in config["preprocess"]["missing_values"].get("mean")]
+        fill_na_median_cols = [i.lower() for i in config["preprocess"]["missing_values"].get("median")]
+        fill_na_mode_cols = [i.lower() for i in config["preprocess"]["missing_values"].get("mode")]
         
-        default_na_cols = list(set(numerical_features) - set(fill_na_mean_cols) - set(fill_na_median_cols))
+        # numerical outliers
+        outlier_cols = [i.lower() for i in config["preprocess"]["outliers"]]
         
-        # check that numerical nan columns are numerical
-        assert len(set(fill_na_mean_cols + fill_na_median_cols) - set(numerical_features)) == 0, "Can not be non-numerical columns in mean or median config"
-        
-        print(f'Categorical features({len(categorical_features)}): {categorical_features}')
-        print(f'Numerical features({len(numerical_features)}): {numerical_features}')
-        
-        # build pipeline
-        categorical_pipeline = Pipeline(steps=[
-            ('fill_na', SimpleImputer(strategy='constant', fill_value='Unknown')),
-            ('onehot', OneHotEncoder(handle_unknown='ignore'))
-        ])
-        
-        numerical_pipeline = Pipeline(steps=[
-            ('outlier', OutlierHandler()),
+        # numerical PIPELINE
+        num_pipe = Pipeline([
+            ('imputer', SimpleImputer(strategy=def_nan_num_strategy)),
             ('scaler', StandardScaler())
         ])
         
-        preprocessor = ColumnTransformer(transformers=[
-            ('fill_na_mean', SimpleImputer(strategy='mean'), fill_na_mean_cols),
-            ('fill_na_median', SimpleImputer(strategy='median'), fill_na_median_cols),
-            ('fill_na_numerical_default', SimpleImputer(strategy='constant', fill_value=0), default_na_cols),
-            ('numerical', numerical_pipeline, numerical_features),
-            ('categorical', categorical_pipeline, categorical_features)
+        # categorical PIPELINE
+        cat_pipe = Pipeline([
+            ('imputer', SimpleImputer(strategy='constant', fill_value='missing')),
+            ('encoder', OneHotEncoder(handle_unknown='ignore', drop='first'))
         ])
+        
+        # preprocessor
+        preprocessor = ColumnTransformer([
+            ('mean', SimpleImputer(strategy='mean'), fill_na_mean_cols),
+            ('median', SimpleImputer(strategy='median'), fill_na_median_cols),
+            ('mode', SimpleImputer(strategy='most_frequent'), fill_na_mode_cols),
+            ('outlier_handler', OutlierHandler(), outlier_cols),
+            ('num', num_pipe, numerical_cols),
+            ('cat', cat_pipe, categorical_cols)
+        ], remainder='passthrough')
         
         return preprocessor
 
@@ -115,22 +114,29 @@ class ChurnPreprocessor(IPreprocessor):
         df = self._get_data()
         
         # preprocess data
+        pk = df[self._pk]
         y = df[self._y]
         X = df
-        
-        for col in X.columns:
-            print(f"{col}: {X[col].dtype}")
         
         preprocessor = ChurnPreprocessor._build_preprocessor(X=X, y=y)
         
         X = preprocessor.fit_transform(X=X, y=y)
         
+        # cast to float32
+        X = X.astype(np.float32)
+        
         # save preprocessed data
         df = pd.DataFrame(X)
+        
         df[self._y] = y
+        df[self._pk] = pk
+        
+        # search any columns with "missing" value and replace with np.nan, then drop them
+        df = df.replace('missing', np.nan)
+        df = df.dropna(axis=1, how='any')
         
         pg_hook = PostgresHook(postgres_conn_id=self._postgres_conn_id)
         engine = create_engine(pg_hook.get_uri())
         
-        df.to_sql(f"{self._table_name}_preprocessed", engine, index=False, if_exists='replace')
+        df.to_sql(f"{self._table_name}_preprocessed", engine, if_exists='replace', index=False)
         
