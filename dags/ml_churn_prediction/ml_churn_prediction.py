@@ -22,6 +22,8 @@ from sklearn.base import BaseEstimator, TransformerMixin
 
 from ml_churn_prediction.preprocessor.i_preprocessor import IPreprocessor
 from ml_churn_prediction.preprocessor.churn_preprocessor import ChurnPreprocessor
+from ml_churn_prediction.trainer.i_trainer import ITrainer
+from ml_churn_prediction.trainer.churn_trainer import ChurnTrainer
 
 ID_CONNECTION = 'postgres_conn'
 DAG_ID = 'ml_churn_prediction'
@@ -32,15 +34,6 @@ TABLE_NAME = 'churn_prediction_dataset'
 
 MODELS_PATH = f"/opt/airflow/data/models"
 CONFIG_PATH = f"/opt/airflow/config"
-
-def _read_config() -> dict:
-    """
-    Read config from Postgres
-    """
-    with open(f"{CONFIG_PATH}/{DAG_ID}.json", 'r') as f:
-        config = json.load(f)
-        
-    return config
 
 def _get_data() -> pd.DataFrame:
     """
@@ -55,46 +48,7 @@ def _get_data() -> pd.DataFrame:
     
     return df
 
-def train() -> dict:
-    """
-    Train model
-    """
-    seed = randint(0, 100)
-    
-    df = _get_data()
-    
-    # sort by PK ensures split with same seed will produce same result
-    df = df.sort_values(by=PK)
-    
-    # train test split
-    y = df[Y_COL]
-    X = df.drop([Y_COL, PK], axis=1)
-    
-    for i in X.columns:
-        print(f"{i}: TYPE={X[i].dtype}, MAX={X[i].max()}, MIN={X[i].min()}, HAS_NULL={X[i].isnull().sum()}")
-    
-    X_train, _, y_train, _ = train_test_split(X, y, test_size=0.2, random_state=seed)
-    
-    # build model using pipeline
-    model = Pipeline(steps=[
-        ('classifier', RandomForestClassifier())
-    ])
-    
-    model.fit(X_train, y_train)
-    
-    # save model
-    model_name = f"model_{seed}_{datetime.now().strftime('%Y%m%d%H%M%S')}.pkl"
-    model_path = f"{MODELS_PATH}/{model_name}"
-    
-    with open(model_path, 'wb') as f:
-        pickle.dump(model, f)
-    
-    return {
-        "seed":seed, 
-        "model_name":model_name
-    }
-
-def validate(seed:int, model_name:str) -> None:
+def validate(**context) -> None:
     """
     Evaluate model, y is a binary variable
     
@@ -103,6 +57,11 @@ def validate(seed:int, model_name:str) -> None:
     
     :return: None
     """
+    model_data = context['ti'].xcom_pull(key='training_result')
+    
+    model_name = model_data['model_name']
+    seed = model_data['seed']
+    
     eval_table_name = f"{TABLE_NAME}_evaluation"
     
     df = _get_data()
@@ -149,6 +108,7 @@ with DAG(
     start_date=datetime.now()
     ):
     
+    # PREPROCESSOR
     preprocessor:IPreprocessor = ChurnPreprocessor(
         pk=PK,
         y=Y_COL,
@@ -160,17 +120,25 @@ with DAG(
         task_id='preprocess_data',
         python_callable=preprocessor.preprocess
     )
+    
+    # TRAINER
+    trainer:ITrainer = ChurnTrainer(
+        pk=PK,
+        y=Y_COL,
+        conn_id=ID_CONNECTION,
+        table_name=TABLE_NAME
+    )
         
     train_model = PythonOperator(
         task_id='train_model',
-        python_callable=train
+        python_callable=trainer.train,
+        provide_context=True
     )
     
     evaluate_model = PythonOperator(
         task_id='evaluate_model',
         python_callable=validate,
-        op_kwargs={'seed': train_model.output['seed'], 'model_name': train_model.output['model_name']}
+        provide_context=True
     )
     
     preprocess_data >> train_model >> evaluate_model
-    #train_model >> evaluate_model
