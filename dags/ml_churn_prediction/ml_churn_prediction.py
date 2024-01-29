@@ -1,24 +1,7 @@
 from datetime import datetime
-import pickle
-import json
-from random import randint
 
 from airflow import DAG
 from airflow.operators.python_operator import PythonOperator
-from airflow.providers.postgres.hooks.postgres import PostgresHook
-
-from sqlalchemy import create_engine
-
-import numpy as np
-import pandas as pd
-
-from sklearn.pipeline import Pipeline
-from sklearn.compose import ColumnTransformer
-from sklearn.preprocessing import OneHotEncoder, StandardScaler, FunctionTransformer
-from sklearn.model_selection import train_test_split
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.impute import KNNImputer, SimpleImputer
-from sklearn.base import BaseEstimator, TransformerMixin
 
 from ml_churn_prediction.preprocessor.i_preprocessor import IPreprocessor
 from ml_churn_prediction.preprocessor.churn_preprocessor import ChurnPreprocessor

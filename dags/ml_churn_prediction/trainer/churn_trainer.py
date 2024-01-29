@@ -82,16 +82,4 @@ class ChurnTrainer(ITrainer):
         }
         
         print(f"Trained model {model_name} with seed {seed}")
-        
-        # print feature importance
-        feature_importance = model['classifier'].feature_importances_
-        feature_importance = pd.DataFrame({
-            'feature':X_train.columns,
-            'importance':feature_importance
-        })
-        feature_importance = feature_importance.sort_values(by='importance', ascending=False)
-        # save feature importance
-        feature_importance_path = f"{MODELS_PATH}/{model_name}_feature_importance.csv"
-        feature_importance.to_csv(feature_importance_path, index=False)
-        
         context['ti'].xcom_push(key='training_result', value=result)
