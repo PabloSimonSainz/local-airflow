@@ -2,6 +2,7 @@ from airflow.providers.postgres.hooks.postgres import PostgresHook
 
 from sqlalchemy import create_engine
 import pickle
+import time
 
 import numpy as np
 import pandas as pd
