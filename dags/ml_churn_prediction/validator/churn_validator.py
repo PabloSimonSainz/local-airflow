@@ -67,10 +67,8 @@ class ChurnValidator(IValidator):
         # evaluate model
         y_pred = model.predict(X_test)
         
-        start_time = time.time()
         # evaluate model with the whole dataset
         y_pred_all = model.predict(X)
-        end_time = time.time() - start_time
         
         # insert id, accuracy, precision, recall, f1 score to Postgres
         values = {
@@ -90,8 +88,7 @@ class ChurnValidator(IValidator):
             "all_true_positive":[np.sum(y_pred_all[y==1]==1)],
             "all_true_negative":[np.sum(y_pred_all[y==0]==0)],
             "all_false_positive":[np.sum(y_pred_all[y==0]==1)],
-            "all_false_negative":[np.sum(y_pred_all[y==1]==0)],
-            "time_taken":[end_time]
+            "all_false_negative":[np.sum(y_pred_all[y==1]==0)]
         }
         
         pg_hook = PostgresHook(postgres_conn_id=self._postgres_conn_id)
