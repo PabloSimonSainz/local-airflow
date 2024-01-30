@@ -117,12 +117,12 @@ services:
           memory: 400MB
 
   minio:
-    hostname: minio
+    hostname: minio 
     container_name: minio
     image: 'minio/minio:latest'
     environment:
-        MINIO_ROOT_USER: airflow1
-        MINIO_ROOT_PASSWORD: airflow1
+      MINIO_ROOT_USER: "{AWS_ACCESS_KEY_ID}"
+      MINIO_ROOT_PASSWORD: "{AWS_SECRET_ACCESS_KEY}"
     ports:
         - '9000:9000'
         - '9001:9001'
@@ -137,7 +137,7 @@ services:
         interval: 60s
         timeout: 20s
         retries: 3
-
+    
   bucket:
     hostname: bucket
     container_name: bucket
@@ -148,8 +148,8 @@ services:
         - minio
     entrypoint: >
       /bin/sh -c "
-      while ! /usr/bin/mc config host add minio http://minio:9000 airflow1 airflow1; 
-      do sleep 1; 
+      while ! /usr/bin/mc config host add minio http://minio:9000 {AWS_ACCESS_KEY_ID} {AWS_SECRET_ACCESS_KEY};
+      do sleep 1;
       done;
       echo 'minio connected';
       /usr/bin/mc mb minio/bucket;
@@ -342,6 +342,32 @@ services:
       <<: *airflow-common-depends-on
       airflow-init:
         condition: service_completed_successfully
+
+  mlflow:
+    container_name: mlflow_server
+    image: mlflow_server
+    build: 
+        context: ./mlflow
+        dockerfile: Dockerfile
+    restart: always
+    depends_on:
+        - minio
+        - postgres
+    ports:
+        - "5000:5000"
+    networks:
+        - airflow
+    environment:
+        - MLFLOW_S3_ENDPOINT_URL=http://minio:9000
+        - AWS_ACCESS_KEY_ID=${AWS_ACCESS_KEY_ID}
+        - AWS_SECRET_ACCESS_KEY=${AWS_SECRET_ACCESS_KEY}
+        - MLFLOW_ARTIFACT_URI=s3://bucket
+    command: mlflow server --backend-store-uri "postgresql+psycopg2://airflow:airflow@postgres/airflow" --default-artifact-root s3://bucket --host 0.0.0.0
+    healthcheck:
+        test: ["CMD", "curl", "-f", "http://mlflow:5000/"]
+        interval: 60s
+        timeout: 20s
+        retries: 3
 
 volumes:
     postgres:
