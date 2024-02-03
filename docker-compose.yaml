@@ -104,8 +104,6 @@ services:
       - postgres:/data/postgres
     ports:
       - 5432:5432
-    networks:
-      - backend
     restart: on-failure
     healthcheck:
       test: ["CMD", "pg_isready"]
@@ -132,8 +130,7 @@ services:
     volumes:
         - minio_data:/data
     networks:
-        - frontend
-        - backend
+        - airflow
     command: server /data
     restart: on-failure
     healthcheck:
@@ -145,8 +142,7 @@ services:
   createbuckets:
     image: minio/mc
     networks:
-        - frontend
-        - backend
+        - airflow
     depends_on:
         - minio
     entrypoint: >
@@ -380,7 +376,5 @@ volumes:
     minio_data:
   
 networks:
-  frontend:
-    driver: bridge
-  backend:
+  airflow:
     driver: bridge
