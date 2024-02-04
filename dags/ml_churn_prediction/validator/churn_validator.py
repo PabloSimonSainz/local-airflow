@@ -52,6 +52,9 @@ class ChurnValidator(IValidator):
         
         df = self._get_data()
         
+        # sort by self._pk ensures split with same seed will produce same result
+        df = df.sort_values(by=self._pk)
+        
         # train test split
         y = df[self._y]
         X = df.drop([self._y, self._pk], axis=1)
