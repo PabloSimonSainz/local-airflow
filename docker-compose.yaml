@@ -51,12 +51,14 @@ x-airflow-common:
   # Comment the image line, place your Dockerfile in the directory where you placed the docker-compose.yaml
   # and uncomment the "build" line below, Then run `docker-compose build` to build the images.
   #image: ${AIRFLOW_IMAGE_NAME:-apache/airflow:2.8.0}
-  build: .
+  build: 
+    context: ./docker/airflow
+    dockerfile: Dockerfile
   environment:
     &airflow-common-env
     AIRFLOW__CORE__EXECUTOR: CeleryExecutor
-    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
-    AIRFLOW__CELERY__RESULT_BACKEND: db+postgresql://airflow:airflow@postgres/airflow
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${AIRFLOW_POSTGRES_USER}:${AIRFLOW_POSTGRES_PASSWORD}@postgres/${AIRFLOW_POSTGRES_DB} # Initialized by init.sql
+    AIRFLOW__CELERY__RESULT_BACKEND: db+postgresql://${AIRFLOW_POSTGRES_USER}:${AIRFLOW_POSTGRES_PASSWORD}@postgres/${AIRFLOW_POSTGRES_DB}
     AIRFLOW__CELERY__BROKER_URL: redis://:@redis:6379/0
     AIRFLOW__CORE__FERNET_KEY: ''
     AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
@@ -80,8 +82,7 @@ x-airflow-common:
     - ${AIRFLOW_PROJ_DIR:-.}/plugins:/opt/airflow/plugins
     - ${AIRFLOW_PROJ_DIR:-.}/data/:/opt/airflow/data/
     - ${AIRFLOW_PROJ_DIR:-.}/ddls/:/opt/airflow/ddls/
-    - ${AIRFLOW_PROJ_DIR:-.}/scripts/:/opt/airflow/ddls/
-    - ${AIRFLOW_PROJ_DIR:-.}/:/opt/airflow/common
+    #- ${AIRFLOW_PROJ_DIR:-.}/:/opt/airflow/common
   user: "${AIRFLOW_UID:-50000}:0"
   depends_on:
     &airflow-common-depends-on
@@ -96,9 +97,8 @@ services:
     container_name: postgres
     image: postgres:14-bullseye
     environment:
-      POSTGRES_USER: airflow
-      POSTGRES_PASSWORD: airflow
-      POSTGRES_DB: airflow
+      POSTGRES_USER: root
+      POSTGRES_PASSWORD: root
       PGDATA: /data/postgres
     volumes:
       - postgres:/data/postgres
@@ -109,7 +109,7 @@ services:
     healthcheck:
       test: ["CMD", "pg_isready"]
       interval: 60s
-      retries: 3
+      retries: 5
       timeout: 30s
     deploy:
       resources:
@@ -117,12 +117,14 @@ services:
           memory: 400MB
 
   minio:
-    hostname: minio
+    hostname: bucket 
     container_name: minio
     image: 'minio/minio:latest'
     environment:
-        MINIO_ROOT_USER: airflow1
-        MINIO_ROOT_PASSWORD: airflow1
+      MINIO_ROOT_USER: airflow1
+      MINIO_ROOT_PASSWORD: airflow1
+      MINIO_PORT: "9000"
+      MINIO_CONSOLE_ADDRESS: ":9001"
     ports:
         - '9000:9000'
         - '9001:9001'
@@ -130,37 +132,28 @@ services:
         - minio_data:/data
     networks:
         - airflow
-    command: server /data --console-address ":9001"
+    command: server /data
     restart: on-failure
     healthcheck:
         test: ["CMD", "curl", "-f", "http://bucket:9000/minio/health/live"]
         interval: 60s
         timeout: 20s
         retries: 3
-
-  bucket:
-    hostname: bucket
-    container_name: bucket
-    image: 'minio/mc:latest'
+    
+  createbuckets:
+    image: minio/mc
     networks:
         - airflow
     depends_on:
         - minio
     entrypoint: >
-      /bin/sh -c "
-      while ! /usr/bin/mc config host add minio http://minio:9000 airflow1 airflow1; 
-      do sleep 1; 
-      done;
-      echo 'minio connected';
-      /usr/bin/mc mb minio/bucket;
-      exit 0;
-      "
-    restart: on-failure
-    healthcheck:
-        test: ["CMD", "curl", "-f", "http://bucket:9000/minio/health/live"]
-        interval: 60s
-        timeout: 20s
-        retries: 3
+        /bin/sh -c "
+        /usr/bin/mc config host add myminio http://bucket:9000 airflow1 airflow1;
+        /usr/bin/mc rm -r --force myminio/airflow;
+        /usr/bin/mc mb myminio/airflow;
+        /usr/bin/mc policy download myminio/airflow;
+        exit 0;
+        "
 
   redis:
     image: redis:latest
@@ -320,7 +313,7 @@ services:
       - bash
       - -c
       - airflow
-
+      
   # You can enable flower by adding "--profile flower" option e.g. docker-compose --profile flower up
   # or by explicitly targeted on the command line e.g. docker-compose up flower.
   # See: https://docs.docker.com/compose/profiles/
@@ -343,6 +336,41 @@ services:
       airflow-init:
         condition: service_completed_successfully
 
+
+  mlflow:
+    build:
+      context: ./docker/mlflow
+      args:
+        - MLFLOW_VERSION=${MLFLOW_VERSION}
+    image: mlflow:latest
+    expose: 
+      - "${MLFLOW_TRACKING_SERVER_PORT}"
+    ports:
+      - "${MLFLOW_TRACKING_SERVER_PORT}:${MLFLOW_TRACKING_SERVER_PORT}"
+    depends_on: 
+      postgres:
+        condition: service_healthy
+      airflow-webserver: # Prioritize Airflow Webserver to be healthy before starting MLflow
+        condition: service_healthy
+    environment: 
+      MLFLOW_TRACKING_SERVER_HOST: ${MLFLOW_TRACKING_SERVER_HOST}
+      MLFLOW_TRACKING_SERVER_PORT: ${MLFLOW_TRACKING_SERVER_PORT}
+      MLFLOW_ARTIFACT_STORE: ${MLFLOW_ARTIFACT_STORE}
+      MLFLOW_BACKEND_STORE: ${MLFLOW_BACKEND_STORE}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DATABASE: ${MLFLOW_POSTGRES_DB}
+      POSTGRES_PORT: ${POSTGRES_PORT}
+      WAIT_FOR_IT_TIMEOUT: ${WAIT_FOR_IT_TIMEOUT}
+    volumes:
+      - ./${MLFLOW_ARTIFACT_STORE}:/${MLFLOW_ARTIFACT_STORE}
+    command: >
+      mlflow server
+      --backend-store-uri postgresql://${MLFLOW_POSTGRES_USER}:${MLFLOW_POSTGRES_PASSWORD}@postgres:${POSTGRES_PORT}/${MLFLOW_POSTGRES_DB}
+      --host ${MLFLOW_TRACKING_SERVER_HOST}
+      --artifacts-destination s3://bucket/mlflow
+      --serve-artifacts
+      
 volumes:
     postgres:
     airflow-data:
@@ -350,4 +378,4 @@ volumes:
   
 networks:
   airflow:
-      driver: bridge
+    driver: bridge
