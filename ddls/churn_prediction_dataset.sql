@@ -1,4 +1,4 @@
-CREATE TABLE if not exists churn_prediction_dataset (
+CREATE TABLE IF NOT EXISTS churn_prediction_dataset (
 	Customer_ID INT PRIMARY KEY,
 	churn INT,
 	new_cell VARCHAR(255),

@@ -1,19 +1,12 @@
-FROM python:3.7
-
-# Create app directory
-WORKDIR /app
-
-# Install app dependencies
-COPY requirements.txt ./
-
-# update pip
-RUN pip install --upgrade pip
-
-RUN pip install -r requirements.txt
-
-# Bundle app source
-COPY . .
+FROM python:3.10-slim-buster
 
 EXPOSE 5000
 
-CMD [ "mlflow", "server", "--host", "0.0.0.0", "--port", "5000", "--backend-store-uri", "postgresql://airflow:airflow@postgres/airflow", "--default-artifact-root", "/mlflow/artifacts" ]
+ARG SERVER_DIR=/server
+
+COPY requirements.txt /tmp
+RUN pip install --upgrade pip
+RUN pip install -r /tmp/requirements.txt
+
+WORKDIR ${SERVER_DIR}
+COPY . ${SERVER_DIR}

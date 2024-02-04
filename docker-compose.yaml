@@ -57,8 +57,8 @@ x-airflow-common:
   environment:
     &airflow-common-env
     AIRFLOW__CORE__EXECUTOR: CeleryExecutor
-    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow
-    AIRFLOW__CELERY__RESULT_BACKEND: db+postgresql://airflow:airflow@postgres/airflow
+    AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://${AIRFLOW_POSTGRES_USER}:${AIRFLOW_POSTGRES_PASSWORD}@postgres/${AIRFLOW_POSTGRES_DB} # Initialized by init.sql
+    AIRFLOW__CELERY__RESULT_BACKEND: db+postgresql://${AIRFLOW_POSTGRES_USER}:${AIRFLOW_POSTGRES_PASSWORD}@postgres/${AIRFLOW_POSTGRES_DB}
     AIRFLOW__CELERY__BROKER_URL: redis://:@redis:6379/0
     AIRFLOW__CORE__FERNET_KEY: ''
     AIRFLOW__CORE__DAGS_ARE_PAUSED_AT_CREATION: 'true'
@@ -82,8 +82,7 @@ x-airflow-common:
     - ${AIRFLOW_PROJ_DIR:-.}/plugins:/opt/airflow/plugins
     - ${AIRFLOW_PROJ_DIR:-.}/data/:/opt/airflow/data/
     - ${AIRFLOW_PROJ_DIR:-.}/ddls/:/opt/airflow/ddls/
-    - ${AIRFLOW_PROJ_DIR:-.}/scripts/:/opt/airflow/ddls/
-    - ${AIRFLOW_PROJ_DIR:-.}/:/opt/airflow/common
+    #- ${AIRFLOW_PROJ_DIR:-.}/:/opt/airflow/common
   user: "${AIRFLOW_UID:-50000}:0"
   depends_on:
     &airflow-common-depends-on
@@ -98,12 +97,12 @@ services:
     container_name: postgres
     image: postgres:14-bullseye
     environment:
-      POSTGRES_USER: airflow
-      POSTGRES_PASSWORD: airflow
-      POSTGRES_DB: airflow
+      POSTGRES_USER: root
+      POSTGRES_PASSWORD: root
       PGDATA: /data/postgres
     volumes:
       - postgres:/data/postgres
+      - ./ddls/init.sql:/docker-entrypoint-initdb.d/init.sql
     ports:
       - 5432:5432
     restart: on-failure
@@ -341,25 +340,37 @@ services:
   mlflow:
     build:
       context: ./docker/mlflow
-      dockerfile: Dockerfile
-    container_name: mlflow
+      args:
+        - MLFLOW_VERSION=${MLFLOW_VERSION}
+    image: mlflow:latest
+    expose: 
+      - "${MLFLOW_TRACKING_SERVER_PORT}"
     ports:
-      - 5000:5000
-    volumes:
-      - ./mlflows:/mlflow/artifacts
-      - ./:/workspace/
-    depends_on:
+      - "${MLFLOW_TRACKING_SERVER_PORT}:${MLFLOW_TRACKING_SERVER_PORT}"
+    depends_on: 
       postgres:
         condition: service_healthy
-    networks:
-      - airflow
-    environment:
-      MLFLOW_VIRTUAL_HOST: 0.0.0.0
-      MLFLOW_VIRTUAL_PORT: 5000
-      MLFLOW_REMOTE_TRACKING_URI: http://mlflow:5000
-      MLFLOW_ARTIFACT_PATH: /mlflow/artifacts
-      MLFLOW_DB_URI: postgresql://airflow:airflow@postgres/airflow
-
+      airflow-webserver: # Prioritize Airflow Webserver to be healthy before starting MLflow
+        condition: service_healthy
+    environment: 
+      MLFLOW_TRACKING_SERVER_HOST: ${MLFLOW_TRACKING_SERVER_HOST}
+      MLFLOW_TRACKING_SERVER_PORT: ${MLFLOW_TRACKING_SERVER_PORT}
+      MLFLOW_ARTIFACT_STORE: ${MLFLOW_ARTIFACT_STORE}
+      MLFLOW_BACKEND_STORE: ${MLFLOW_BACKEND_STORE}
+      POSTGRES_USER: ${POSTGRES_USER}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DATABASE: ${MLFLOW_POSTGRES_DB}
+      POSTGRES_PORT: ${POSTGRES_PORT}
+      WAIT_FOR_IT_TIMEOUT: ${WAIT_FOR_IT_TIMEOUT}
+    volumes:
+      - ./${MLFLOW_ARTIFACT_STORE}:/${MLFLOW_ARTIFACT_STORE}
+    command: >
+      mlflow server
+      --backend-store-uri postgresql://${MLFLOW_POSTGRES_USER}:${MLFLOW_POSTGRES_PASSWORD}@postgres:${POSTGRES_PORT}/${MLFLOW_POSTGRES_DB}
+      --host ${MLFLOW_TRACKING_SERVER_HOST}
+      --artifacts-destination s3://bucket/mlflow
+      --serve-artifacts
+      
 volumes:
     postgres:
     airflow-data:
