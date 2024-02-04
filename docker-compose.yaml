@@ -51,7 +51,9 @@ x-airflow-common:
   # Comment the image line, place your Dockerfile in the directory where you placed the docker-compose.yaml
   # and uncomment the "build" line below, Then run `docker-compose build` to build the images.
   #image: ${AIRFLOW_IMAGE_NAME:-apache/airflow:2.8.0}
-  build: .
+  build: 
+    context: ./docker/airflow
+    dockerfile: Dockerfile
   environment:
     &airflow-common-env
     AIRFLOW__CORE__EXECUTOR: CeleryExecutor
@@ -120,8 +122,8 @@ services:
     container_name: minio
     image: 'minio/minio:latest'
     environment:
-      MINIO_ROOT_USER: "${AWS_ACCESS_KEY_ID}"
-      MINIO_ROOT_PASSWORD: "${AWS_SECRET_ACCESS_KEY}"
+      MINIO_ROOT_USER: airflow1
+      MINIO_ROOT_PASSWORD: airflow1
       MINIO_PORT: "9000"
       MINIO_CONSOLE_ADDRESS: ":9001"
     ports:
@@ -147,7 +149,7 @@ services:
         - minio
     entrypoint: >
         /bin/sh -c "
-        /usr/bin/mc config host add myminio http://bucket:9000 ${AWS_ACCESS_KEY_ID} ${AWS_SECRET_ACCESS_KEY};
+        /usr/bin/mc config host add myminio http://bucket:9000 airflow1 airflow1;
         /usr/bin/mc rm -r --force myminio/airflow;
         /usr/bin/mc mb myminio/airflow;
         /usr/bin/mc policy download myminio/airflow;
@@ -335,40 +337,28 @@ services:
       airflow-init:
         condition: service_completed_successfully
 
+
   mlflow:
-    container_name: mlflow_server
-    image: mlflow_server
-    build: 
-        context: ./docker/mlflow
-        dockerfile: Dockerfile
-    restart: always
-    depends_on:
-        - postgres
-        - minio
+    build:
+      context: ./docker/mlflow
+      dockerfile: Dockerfile
+    container_name: mlflow
     ports:
-        - "5000:5000"
+      - 5000:5000
+    volumes:
+      - ./mlflows:/mlflow/artifacts
+      - ./:/workspace/
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - airflow
     environment:
-        - AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID}"
-        - AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY}"
-        - POSTGRES_USER=airflow
-        - POSTGRES_PASSWORD=airflow
-        - POSTGRES_DB=airflow
-        - MLFLOW_S3_ENDPOINT_URL=http://minio:9000
-        - MLFLOW_S3_IGNORE_TLS=true
-        - MLFLOW_TRACKING_URI=http://mlflow:5000
-        - MLFLOW_BACKEND_STORE_URI=postgresql://airflow:airflow@postgres:5432/airflow
-    healthcheck:
-        test: ["CMD", "curl", "-f", "http://localhost:5000/"]
-        interval: 60s
-        timeout: 20s
-        retries: 3
-    command: >
-        mlflow server
-        --backend-store-uri postgresql://airflow:airflow@postgres:5432/airflow
-        --host 0.0.0.0
-        --serve-artifacts
-        --artifacts-destination s3://bucket/mlflow
-  
+      MLFLOW_VIRTUAL_HOST: 0.0.0.0
+      MLFLOW_VIRTUAL_PORT: 5000
+      MLFLOW_REMOTE_TRACKING_URI: http://mlflow:5000
+      MLFLOW_ARTIFACT_PATH: /mlflow/artifacts
+      MLFLOW_DB_URI: postgresql://airflow:airflow@postgres/airflow
 
 volumes:
     postgres:
