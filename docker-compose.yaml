@@ -338,6 +338,7 @@ services:
 
 
   mlflow:
+    container_name: mlflow
     build:
       context: ./docker/mlflow
       args:
@@ -375,6 +376,7 @@ volumes:
     postgres:
     airflow-data:
     minio_data:
+    mlflow_data:
   
 networks:
   airflow:
