@@ -12,6 +12,9 @@ from sklearn.pipeline import Pipeline
 from sklearn.model_selection import train_test_split
 from sklearn.ensemble import RandomForestClassifier
 
+import mlflow
+from mlflow.tracking import MlflowClient
+
 from ml_churn_prediction.preprocessor.i_preprocessor import IPreprocessor
 from ml_churn_prediction.preprocessor.churn_preprocessor import ChurnPreprocessor
 
@@ -20,14 +23,28 @@ from ml_churn_prediction.trainer.i_trainer import ITrainer
 ID_CONNECTION = 'postgres_conn'
 DAG_ID = 'ml_churn_prediction'
 
-MODELS_PATH = f"/opt/airflow/data/models"
-
 class ChurnTrainer(ITrainer):
-    def __init__(self, pk, y, conn_id, table_name):
+    def __init__(self, pk:str, y:str, conn_id:str, table_name:str, models_path:str, experiment_data:dict):
+        """
+        Constructor
+        
+        :param pk: primary key
+        :param y: Target column
+        :param conn_id: Connection id
+        :param table_name: Dataset table name
+        :param models_path: Models path
+        :param tracking_uri: Mlflow tracking uri
+        """
         self._pk = pk
         self._y = y
         self._postgres_conn_id = conn_id
+        self._models_path = models_path
         self._table_name = table_name
+        
+        if 'experiment_name' not in experiment_data:
+            raise ValueError("experiment_name is required in experiment_data")
+        
+        self._experiment_data = experiment_data
     
     def _get_data(self) -> pd.DataFrame:
         """
@@ -41,11 +58,26 @@ class ChurnTrainer(ITrainer):
         df:pd.DataFrame = pd.read_sql(f"SELECT * FROM {self._table_name}_preprocessed", engine)
         
         return df
+    
+    def _create_model(self, model, params) -> Pipeline:
+        """
+        Create model
+        
+        :param seed: Random seed
+        """
+        model = Pipeline(steps=[
+            ('classifier', model(**params))
+        ])
+        
+        return model, model.__class__.__name__
 
     def train(self, **context):
         """
         Train model
         """
+        model = RandomForestClassifier
+        params = {}
+        
         seed = randint(0, 100)
         
         df = self._get_data()
@@ -57,21 +89,25 @@ class ChurnTrainer(ITrainer):
         y = df[self._y]
         X = df.drop([self._y, self._pk], axis=1)
         
-        for i in X.columns:
-            print(f"{i}: TYPE={X[i].dtype}, MAX={X[i].max()}, MIN={X[i].min()}, HAS_NULL={X[i].isnull().sum()}")
-        
         X_train, _, y_train, _ = train_test_split(X, y, test_size=0.2, random_state=seed)
         
         # build model using pipeline
-        model = Pipeline(steps=[
-            ('classifier', RandomForestClassifier())
-        ])
+        model, model_name = self._create_model(model, params)
         
-        model.fit(X_train, y_train)
+        with mlflow.start_run() as run:
+            mlflow.log_param("seed", seed)
+            mlflow.log_param("model_name", model_name)
+            
+            for k, v in params.items():
+                mlflow.log_param(k, v)
+            
+            model.fit(X_train, y_train)
+            
+            mlflow.register_model(f"runs:/{run.info.run_id}/model", self._experiment_data['experiment_name'])
         
         # save model
-        model_name = f"model_{seed}_{datetime.now().strftime('%Y%m%d%H%M%S')}"
-        model_path = f"{MODELS_PATH}/{model_name}.pkl"
+        model_name = f"{model_name.lower()}_{seed}_{datetime.now().strftime('%Y%m%d%H%M%S')}"
+        model_path = f"{self._models_path}/{model_name}.pkl"
         
         with open(model_path, 'wb') as f:
             pickle.dump(model, f)
