@@ -3,6 +3,8 @@ from datetime import datetime
 from airflow import DAG
 from airflow.operators.python_operator import PythonOperator
 
+import mlflow
+
 from ml_churn_prediction.preprocessor.i_preprocessor import IPreprocessor
 from ml_churn_prediction.preprocessor.churn_preprocessor import ChurnPreprocessor
 from ml_churn_prediction.trainer.i_trainer import ITrainer
@@ -19,11 +21,20 @@ TABLE_NAME = 'churn_prediction_dataset'
 
 MODELS_PATH = f"/opt/airflow/data/models"
 CONFIG_PATH = f"/opt/airflow/config"
+
+EXPERIMENT_DATA = {
+    'experiment_name':'churn_prediction',
+    'tracking_uri':'http://host.docker.internal:5000'
+}
+
     
 with DAG(
     dag_id=DAG_ID,
     start_date=datetime.now()
     ):
+    mlflow.set_tracking_uri(EXPERIMENT_DATA['tracking_uri'])
+    mlflow.set_experiment(EXPERIMENT_DATA['experiment_name'])
+    mlflow.sklearn.autolog(silent=True, log_models=False)
     
     # PREPROCESSOR
     preprocessor:IPreprocessor = ChurnPreprocessor(
@@ -43,7 +54,9 @@ with DAG(
         pk=PK,
         y=Y_COL,
         conn_id=ID_CONNECTION,
-        table_name=TABLE_NAME
+        table_name=TABLE_NAME,
+        models_path=MODELS_PATH,
+        experiment_data=EXPERIMENT_DATA
     )
         
     train_model = PythonOperator(

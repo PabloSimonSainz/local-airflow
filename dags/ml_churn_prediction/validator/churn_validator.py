@@ -2,8 +2,8 @@ from airflow.providers.postgres.hooks.postgres import PostgresHook
 
 from sqlalchemy import create_engine
 import pickle
-import time
-
+from datetime import datetime
+import mlflow
 import numpy as np
 import pandas as pd
 
@@ -47,6 +47,7 @@ class ChurnValidator(IValidator):
         
         model_name = model_data['model_name']
         seed = model_data['seed']
+        run_id = model_data['run_id']
         
         eval_table_name = f"{self._table_name}_evaluation"
         
@@ -60,6 +61,7 @@ class ChurnValidator(IValidator):
         X = df.drop([self._y, self._pk], axis=1)
         
         _, X_test, _, y_test = train_test_split(X, y, test_size=0.2, random_state=seed)
+        test_shape = X_test.shape
         
         # load model
         model_path = f"{MODELS_PATH}/{model_name}.pkl"
@@ -68,7 +70,9 @@ class ChurnValidator(IValidator):
             model = pickle.load(f)
         
         # evaluate model
+        start_time = datetime.now()
         y_pred = model.predict(X_test)
+        end_time = datetime.now()
         
         # evaluate model with the whole dataset
         y_pred_all = model.predict(X)
@@ -93,6 +97,15 @@ class ChurnValidator(IValidator):
             "all_false_positive":[np.sum(y_pred_all[y==0]==1)],
             "all_false_negative":[np.sum(y_pred_all[y==1]==0)]
         }
+        
+        with mlflow.start_run(run_id=run_id) as run:
+            mlflow.log_metric("accuracy", values["test_accuracy"][0])
+            mlflow.log_metric("precision", values["test_precision"][0])
+            mlflow.log_metric("recall", values["test_recall"][0])
+            mlflow.log_metric("f1_score", values["test_f1_score"][0])
+            
+            mlflow.log_param("test_shape", test_shape)
+            mlflow.log_metric("evaluation_time", (end_time - start_time).seconds)
         
         pg_hook = PostgresHook(postgres_conn_id=self._postgres_conn_id)
         engine = create_engine(pg_hook.get_uri())
