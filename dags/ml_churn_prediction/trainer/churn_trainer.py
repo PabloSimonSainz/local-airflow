@@ -10,7 +10,8 @@ import pandas as pd
 
 from sklearn.pipeline import Pipeline
 from sklearn.model_selection import train_test_split
-from sklearn.ensemble import RandomForestClassifier
+#from sklearn.ensemble import RandomForestClassifier
+from lightgbm import LGBMClassifier
 
 import mlflow
 from mlflow.tracking import MlflowClient
@@ -69,14 +70,27 @@ class ChurnTrainer(ITrainer):
             ('classifier', model(**params))
         ])
         
-        return model, model.__class__.__name__
+        return model
 
     def train(self, **context):
         """
         Train model
         """
-        model = RandomForestClassifier
-        params = {}
+        model = LGBMClassifier
+        model_name = model.__name__
+        params = {
+            "num_leaves": 55,
+            "learning_rate": 0.01,
+            "max_depth": 27,
+            "n_estimators": 850,
+            "min_child_samples": 100,
+            "min_child_weight": 60,
+            "subsample": 0.7,
+            "max_bin": 300,
+            "cat_smooth": 70,
+            "cat_l2": 10,
+            "verbosity": -1
+        }
         
         seed = randint(0, 100)
         
@@ -92,7 +106,7 @@ class ChurnTrainer(ITrainer):
         X_train, _, y_train, _ = train_test_split(X, y, test_size=0.2, random_state=seed)
         
         # build model using pipeline
-        model, model_name = self._create_model(model, params)
+        model = self._create_model(model, params)
         
         with mlflow.start_run() as run:
             mlflow.log_param("seed", seed)
@@ -101,21 +115,35 @@ class ChurnTrainer(ITrainer):
             for k, v in params.items():
                 mlflow.log_param(k, v)
             
+            start_time = datetime.now()
             model.fit(X_train, y_train)
+            end_time = datetime.now()
             
-            mlflow.register_model(f"runs:/{run.info.run_id}/model", self._experiment_data['experiment_name'])
-        
+            mlflow.log_metric("training_time", (end_time - start_time).seconds)
+            
+            # register model
+            mlflow.register_model(f"runs:/{run.info.run_id}/model", model_name)
+            
+            # get run id
+            run_id = run.info.run_id
+            
         # save model
         model_name = f"{model_name.lower()}_{seed}_{datetime.now().strftime('%Y%m%d%H%M%S')}"
         model_path = f"{self._models_path}/{model_name}.pkl"
         
         with open(model_path, 'wb') as f:
             pickle.dump(model, f)
-        
-        result = {
+
+        response = {
             "seed":seed, 
-            "model_name":model_name
+            "model_name":model_name,
+            "run_id":run_id
         }
         
         print(f"Trained model {model_name} with seed {seed}")
-        context['ti'].xcom_push(key='training_result', value=result)
+        
+        # push result to xcom
+        context['ti'].xcom_push(
+            key='training_result', 
+            value=response
+        )

@@ -35,8 +35,8 @@ def _read_config() -> dict:
 
 class ChurnPreprocessor(IPreprocessor):
     def __init__(self, pk, y, conn_id, table_name):
-        self._pk = pk
-        self._y = y
+        self._pk = pk.lower()
+        self._y = y.lower()
         self._postgres_conn_id = conn_id
         self._table_name = table_name
     
@@ -56,7 +56,9 @@ class ChurnPreprocessor(IPreprocessor):
         
         print(f"Reading data from {self._table_name}...")
         
+        print(f"Selecting columns: {select_cols}")
         df:pd.DataFrame = pd.read_sql(f"SELECT {select_cols} FROM {self._table_name}", engine)
+        print(f"Columns: {df.columns}")
         
         return df
 
@@ -69,8 +71,8 @@ class ChurnPreprocessor(IPreprocessor):
         
         config = _read_config()
         
-        numerical_cols = X.select_dtypes(exclude=['object']).columns
-        categorical_cols = X.select_dtypes(include=['object']).columns
+        numerical_cols = [i.lower() for i in X.select_dtypes(exclude=['object']).columns]
+        categorical_cols = [i.lower() for i in X.select_dtypes(include=['object']).columns]
         
         # missing values
         fill_na_mean_cols = [i.lower() for i in config["preprocess"]["missing_values"].get("mean")]
@@ -109,6 +111,9 @@ class ChurnPreprocessor(IPreprocessor):
         Enhanced preprocess dataset and save to Postgres
         """
         df = self._get_data()
+        
+        # lower case column names
+        df.columns = df.columns.str.lower()
         
         # preprocess data
         pk = df[self._pk]
