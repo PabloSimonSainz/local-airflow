@@ -121,18 +121,16 @@ services:
     container_name: minio
     image: 'minio/minio:latest'
     environment:
-      MINIO_ROOT_USER: airflow1
-      MINIO_ROOT_PASSWORD: airflow1
-      MINIO_PORT: "9000"
+      AWS_ACCESS_KEY: ${AWS_ACCESS_KEY_ID}
+      AWS_SECRET_KEY: ${AWS_SECRET_ACCESS_KEY}
+      MINIO_PORT: "${MINIO_PORT}"
       MINIO_CONSOLE_ADDRESS: ":9001"
     ports:
-        - '9000:9000'
+        - '${MINIO_PORT}:${MINIO_PORT}'
         - '9001:9001'
     volumes:
         - minio_data:/data
-    networks:
-        - airflow
-    command: server /data
+    command: server /data --address ":9000" --console-address ":9001"
     restart: on-failure
     healthcheck:
         test: ["CMD", "curl", "-f", "http://bucket:9000/minio/health/live"]
@@ -142,13 +140,11 @@ services:
     
   createbuckets:
     image: minio/mc
-    networks:
-        - airflow
     depends_on:
         - minio
     entrypoint: >
         /bin/sh -c "
-        /usr/bin/mc config host add myminio http://bucket:9000 airflow1 airflow1;
+        /usr/bin/mc config host add myminio http://bucket:9000 ${AWS_ACCESS_KEY_ID} ${AWS_SECRET_ACCESS_KEY};
         /usr/bin/mc rm -r --force myminio/airflow;
         /usr/bin/mc mb myminio/airflow;
         /usr/bin/mc policy download myminio/airflow;
@@ -356,20 +352,22 @@ services:
     environment: 
       MLFLOW_TRACKING_SERVER_HOST: ${MLFLOW_TRACKING_SERVER_HOST}
       MLFLOW_TRACKING_SERVER_PORT: ${MLFLOW_TRACKING_SERVER_PORT}
-      MLFLOW_ARTIFACT_STORE: ${MLFLOW_ARTIFACT_STORE}
+      MLFLOW_S3_ENDPOINT_URL: http://s3:${MINIO_PORT}
       MLFLOW_BACKEND_STORE: ${MLFLOW_BACKEND_STORE}
       POSTGRES_USER: ${POSTGRES_USER}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
       POSTGRES_DATABASE: ${MLFLOW_POSTGRES_DB}
       POSTGRES_PORT: ${POSTGRES_PORT}
       WAIT_FOR_IT_TIMEOUT: ${WAIT_FOR_IT_TIMEOUT}
+      AWS_ACCESS_KEY_ID: ${AWS_ACCESS_KEY_ID}
+      AWS_SECRET_ACCESS_KEY: ${AWS_SECRET_ACCESS_KEY}
     volumes:
       - ./${MLFLOW_ARTIFACT_STORE}:/${MLFLOW_ARTIFACT_STORE}
     command: >
       mlflow server
       --backend-store-uri postgresql://${MLFLOW_POSTGRES_USER}:${MLFLOW_POSTGRES_PASSWORD}@postgres:${POSTGRES_PORT}/${MLFLOW_POSTGRES_DB}
       --host ${MLFLOW_TRACKING_SERVER_HOST}
-      --artifacts-destination s3://bucket/mlflow
+      --artifacts-destination s3://airflow/mlflow
       --serve-artifacts
       
 volumes:

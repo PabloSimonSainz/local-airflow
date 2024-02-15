@@ -1,3 +1,4 @@
+import os
 from airflow.providers.postgres.hooks.postgres import PostgresHook
 
 from sqlalchemy import create_engine
@@ -9,17 +10,39 @@ import pandas as pd
 
 from sklearn.model_selection import train_test_split
 
+from airflow.hooks.S3_hook import S3Hook
+
 from ml_churn_prediction.validator.i_validator import IValidator
 
 MODELS_PATH = f"/opt/airflow/data/models"
 CONFIG_PATH = f"/opt/airflow/config"
 
+POSTGRES_CONN_ID = os.environ.get('POSTGRES_CONN_ID', 'postgres_conn')
+S3_CONN_ID = os.environ.get('S3_CONN_ID', 's3_conn')
+
+MIN_ACCURACY = 0.6
+
 class ChurnValidator(IValidator):
-    def __init__(self, pk, y, conn_id, table_name):
+    def __init__(self, pk:str, y:str, table_name:str="churn_prediction", 
+                 bucket_name:str="bucket", key:str="output/models"):
+        """
+        Constructor
+        
+        :param pk: primary key
+        :param y: Target column
+        :param table_name: Dataset table name
+        :param postgres_conn_id: Postgres connection id
+        :param s3_conn_id: S3 connection id
+        """
         self._pk = pk
         self._y = y
-        self._postgres_conn_id = conn_id
         self._table_name = table_name
+        
+        self._bucket_name = bucket_name
+        self._key = key
+        
+        self._postgres_conn_id = POSTGRES_CONN_ID
+        self._s3_conn_id = S3_CONN_ID
     
     def _get_data(self) -> pd.DataFrame:
         """
@@ -64,10 +87,15 @@ class ChurnValidator(IValidator):
         test_shape = X_test.shape
         
         # load model
-        model_path = f"{MODELS_PATH}/{model_name}.pkl"
+        s3 = S3Hook(aws_conn_id=self._s3_conn_id)
         
-        with open(model_path, 'rb') as f:
-            model = pickle.load(f)
+        response = s3.get_key(
+            key=f"{self._key}/{self._table_name}/{model_name}.pkl",
+            bucket_name=self._bucket_name
+        )
+        body = response.get()['Body'].read()
+        
+        model = pickle.loads(body)
         
         # evaluate model
         start_time = datetime.now()
@@ -106,6 +134,12 @@ class ChurnValidator(IValidator):
             
             mlflow.log_param("test_shape", test_shape)
             mlflow.log_metric("evaluation_time", (end_time - start_time).seconds)
+            
+            acc_threshold = context['params'].get('acc_threshold', MIN_ACCURACY)
+            
+            if values["test_accuracy"][0] >= acc_threshold:
+                s3_path = f"s3://{self._bucket_name}/{self._key}/{model_name}.pkl"
+                #mlflow.log_artifact(s3_path, "model")
         
         pg_hook = PostgresHook(postgres_conn_id=self._postgres_conn_id)
         engine = create_engine(pg_hook.get_uri())

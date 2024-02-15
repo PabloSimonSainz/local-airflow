@@ -14,17 +14,13 @@ from airflow import DAG
 from airflow.operators.python_operator import PythonOperator
 
 DAG_ID = 'etl_local_to_posgres'
-POSTGRE_CONN_ID = 'postgres_conn'
-TABLE_NAME = 'churn_prediction_dataset'
-DATASET_PATH = f"/opt/airflow/data/raw/churn_prediction_dataset.csv"
 
-PK='Customer_ID'
-
+POSTGRES_CONN_ID = os.environ.get('POSTGRES_CONN_ID', 'postgres_conn')
     
 etl_process:IIngestor = IngestorCSVToPostgres(
-    postgres_conn_id='postgres_conn',
-    table_name='churn_prediction_dataset',
-    dataset_path="/opt/airflow/data/raw/churn_prediction_dataset.csv",
+    postgres_conn_id=POSTGRES_CONN_ID,
+    table_name='churn_prediction',
+    dataset_path="/opt/airflow/data/raw/churn_prediction.csv",
     pk='Customer_ID'
 )
 

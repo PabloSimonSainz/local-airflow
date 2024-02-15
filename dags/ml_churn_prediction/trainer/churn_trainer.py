@@ -1,3 +1,4 @@
+import os
 from datetime import datetime
 import pickle
 from random import randint
@@ -16,31 +17,44 @@ from lightgbm import LGBMClassifier
 import mlflow
 from mlflow.tracking import MlflowClient
 
+from airflow.hooks.S3_hook import S3Hook
+
 from ml_churn_prediction.preprocessor.i_preprocessor import IPreprocessor
 from ml_churn_prediction.preprocessor.churn_preprocessor import ChurnPreprocessor
 
 from ml_churn_prediction.trainer.i_trainer import ITrainer
 
-ID_CONNECTION = 'postgres_conn'
 DAG_ID = 'ml_churn_prediction'
 
+MODELS_PATH = f"/opt/airflow/data/models"
+
+POSTGRES_CONN_ID = os.environ.get('POSTGRES_CONN_ID', 'postgres_conn')
+S3_CONN_ID = os.environ.get('S3_CONN_ID', 's3_conn')
+
 class ChurnTrainer(ITrainer):
-    def __init__(self, pk:str, y:str, conn_id:str, table_name:str, models_path:str, experiment_data:dict):
+    def __init__(self, pk:str, y:str, experiment_data:dict, table_name:str="churn-prediction", 
+                 bucket_name:str="bucket", key:str="output/models"):
         """
         Constructor
         
         :param pk: primary key
         :param y: Target column
-        :param conn_id: Connection id
         :param table_name: Dataset table name
-        :param models_path: Models path
-        :param tracking_uri: Mlflow tracking uri
+        :param experiment_data: Experiment data
+        :param bucket_name: S3 bucket name
+        :param key: S3 key
+        :param postgre_conn_id: Postgres connection id
+        :param s3_conn_id: S3 connection id
         """
         self._pk = pk
         self._y = y
-        self._postgres_conn_id = conn_id
-        self._models_path = models_path
         self._table_name = table_name
+        
+        self._bucket_name = bucket_name
+        self._key = key
+        
+        self._postgres_conn_id = POSTGRES_CONN_ID
+        self._s3_conn_id = S3_CONN_ID
         
         if 'experiment_name' not in experiment_data:
             raise ValueError("experiment_name is required in experiment_data")
@@ -51,7 +65,7 @@ class ChurnTrainer(ITrainer):
         """
         Read dataset from Postgres
         """
-        pg_hook = PostgresHook(postgres_conn_id=ID_CONNECTION)
+        pg_hook = PostgresHook(postgres_conn_id=self._postgres_conn_id)
         engine = create_engine(pg_hook.get_uri())
         
         print(f"Reading data from {self._table_name}...")
@@ -127,13 +141,19 @@ class ChurnTrainer(ITrainer):
             # get run id
             run_id = run.info.run_id
             
-        # save model
+        # save model in minio
         model_name = f"{model_name.lower()}_{seed}_{datetime.now().strftime('%Y%m%d%H%M%S')}"
-        model_path = f"{self._models_path}/{model_name}.pkl"
         
-        with open(model_path, 'wb') as f:
-            pickle.dump(model, f)
-
+        bytes_file = pickle.dumps(model)
+            
+        s3 = S3Hook(aws_conn_id=self._s3_conn_id)
+        s3.load_bytes(
+            bytes_data=bytes_file,    
+            key=f"{self._key}/{self._table_name}/{model_name}.pkl",
+            bucket_name=self._bucket_name
+        )
+            
+        # upload model to minio
         response = {
             "seed":seed, 
             "model_name":model_name,

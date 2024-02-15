@@ -1,3 +1,4 @@
+import os
 from datetime import datetime
 
 from airflow import DAG
@@ -12,14 +13,12 @@ from ml_churn_prediction.trainer.churn_trainer import ChurnTrainer
 from ml_churn_prediction.validator.i_validator import IValidator
 from ml_churn_prediction.validator.churn_validator import ChurnValidator
 
-ID_CONNECTION = 'postgres_conn'
+ID_CONNECTION = os.environ.get('POSTGRES_CONN_ID', 'postgres_conn')
 DAG_ID = 'ml_churn_prediction'
 
 PK = 'customer_id'.lower()
 Y_COL = 'churn'.lower()
-TABLE_NAME = 'churn_prediction_dataset'
 
-MODELS_PATH = f"/opt/airflow/data/models"
 CONFIG_PATH = f"/opt/airflow/config"
 
 EXPERIMENT_DATA = {
@@ -27,15 +26,21 @@ EXPERIMENT_DATA = {
     'tracking_uri':'http://host.docker.internal:5000'
 }
 
+TABLE_NAME = 'churn_prediction'
+KEY = "output/models"
+BUCKET_NAME = "airflow"
+
     
 with DAG(
     dag_id=DAG_ID,
     start_date=datetime.now()
     ):
     mlflow.set_tracking_uri(EXPERIMENT_DATA['tracking_uri'])
-    mlflow.set_experiment(EXPERIMENT_DATA['experiment_name'])
-    mlflow.sklearn.autolog(silent=True, log_models=False)
-    
+    try:
+        mlflow.create_experiment(EXPERIMENT_DATA['experiment_name'], artifact_location=f"s3://{BUCKET_NAME}/mlflow/{TABLE_NAME}")
+    except Exception as e:
+        mlflow.set_experiment(EXPERIMENT_DATA['experiment_name'])
+        
     # PREPROCESSOR
     preprocessor:IPreprocessor = ChurnPreprocessor(
         pk=PK,
@@ -53,10 +58,10 @@ with DAG(
     trainer:ITrainer = ChurnTrainer(
         pk=PK,
         y=Y_COL,
-        conn_id=ID_CONNECTION,
+        experiment_data=EXPERIMENT_DATA,
         table_name=TABLE_NAME,
-        models_path=MODELS_PATH,
-        experiment_data=EXPERIMENT_DATA
+        bucket_name=BUCKET_NAME,
+        key=KEY
     )
         
     train_model = PythonOperator(
@@ -69,8 +74,9 @@ with DAG(
     validator:IValidator = ChurnValidator(
         pk=PK,
         y=Y_COL,
-        conn_id=ID_CONNECTION,
-        table_name=TABLE_NAME
+        table_name=TABLE_NAME,
+        key=KEY,
+        bucket_name=BUCKET_NAME,
     )
     
     evaluate_model = PythonOperator(
